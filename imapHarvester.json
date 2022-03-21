@@ -1,0 +1,15 @@
+{
+    "maildir_path": "/data/maildir",
+    "traps": [
+        {
+            "user": "trap1@example.org",
+            "password": "password_1",
+            "server": "imap.example.org"
+        },
+        {
+            "user": "trap2@example.org",
+            "password": "password_2",
+            "server": "imap.example.org"
+        }
+    ]
+}
