@@ -9,6 +9,7 @@ import email
 import json
 import logging
 import mailbox
+import random
 import threading
 
 from datetime import datetime, timedelta
@@ -24,27 +25,21 @@ JSON_CONFIG_FILE = 'imapHarvester.json'
 class Helper:
     _LOADED = False
     MAILDIR_PATH = None
-    TRAPS_CONFIG = []
+    CONFIG = None
 
     @staticmethod
-    def load_config():
-        with open(JSON_CONFIG_FILE, 'r') as f:
-            cfg = json.load(f)
+    def get_config():
+        if not Helper.CONFIG:
+            with open(JSON_CONFIG_FILE, 'r') as f:
+                Helper.CONFIG = json.load(f)
         
-        Helper.MAILDIR_PATH = cfg['maildir_path']
-        for trap in cfg['traps']:
-            Helper.TRAPS_CONFIG.append( EmailTrap(trap) )
+        Helper.MAILDIR_PATH = Helper.CONFIG['maildir_path']
+        return Helper.CONFIG
 
     @staticmethod
     def store_message(msg):
         mdir = mailbox.Maildir(Helper.MAILDIR_PATH)
         return mdir.add(msg)
-
-    @staticmethod
-    def get_traps():
-        if not Helper._LOADED:
-            Helper.load_config()
-        return Helper.TRAPS_CONFIG
 
 
 
@@ -78,7 +73,7 @@ class EmailTrap(threading.Thread):
                 self.imap_client.select_folder('INBOX')
         except Exception as e:
                 self.logger.error('exception {} for user {}'.format(e, self.user))
-                self.shutdown.set()
+                self.stop()
 
 
     def run(self):
@@ -90,7 +85,7 @@ class EmailTrap(threading.Thread):
                 # We stop the IMAP connection to this mailbox if 5 errors occured in the last 3 hours
                 if datetime.now() - self.errors[0] < timedelta(hours=3):
                     self.logger.error('Too many exceptions for user {} - shutting down now - {}'.format(self.user, self.errors))
-                    self.shutdown.set()
+                    self.stop()
             try:
                 responses = None
                 if self.has_new_msgs is not False:
@@ -118,8 +113,8 @@ class EmailTrap(threading.Thread):
                 self.errors.append(datetime.now())
                 self.init()
 
-        self.imap_client.logout()
-        self.shutdown.set()
+        if self.imap_client:
+            self.imap_client.logout()
         self.stop()
         self.logger.warning("Logout succeeded!")
     
@@ -143,7 +138,7 @@ class EmailTrap(threading.Thread):
         if count_err:
             last_err = "- last error at {}".format(self.errors[0].isoformat())
 
-        return "{} - {} error(s) {}".format(status, count_err, last_err)
+        return "{} / {} - {} error(s) {}".format(status, self.is_alive(), count_err, last_err)
 
 
 
@@ -154,10 +149,20 @@ def stats(traps):
 
 def restart(traps):
     print("Restarting all stopped traps...")
+    new_traps = []
     for trap in traps:
         if trap.shutdown.is_set():
+            trap.stop()
             trap = EmailTrap(trap.json_cfg)
+            trap.setDaemon(True)
             trap.start()
+        new_traps.append( trap )
+    return new_traps
+
+def kill_trap(traps):
+    random_index = random.randrange(len(traps))
+    print("Killing random trap - index {} - for test purposes...".format(random_index))
+    traps[random_index].stop()
 
 
 def changeLogLevel(verbose):
@@ -168,10 +173,16 @@ def changeLogLevel(verbose):
     print("Logging level set to {}".format( logging.getLevelName(logging.getLogger().getEffectiveLevel()) )) 
 
 
+
+
 def main():
     logging.basicConfig(level=logging.WARN, format='%(asctime)s %(levelname)s %(name)s %(message)s')
 
-    traps = Helper.get_traps()
+    traps = []
+    config = Helper.get_config()
+    for trap in config['traps']:
+       traps.append( EmailTrap(trap) )
+
     for trap in traps:
         logging.info("Starting trap {}".format(trap.user))
         trap.setDaemon(True)
@@ -180,14 +191,16 @@ def main():
     try:
         while True:
             key = input()
-            if key == 'R':
-                restart(traps)
+            if key in ['r', 'R']:
+                traps = restart(traps)
             if key == 'V':
                 changeLogLevel(False)
             if key == 'v':
                 changeLogLevel(True)
             if key in ['s', 'S']:
                 stats(traps)
+            if key in ['k', 'K']:
+                kill_trap(traps)
 
     except KeyboardInterrupt:
         for trap in traps:
